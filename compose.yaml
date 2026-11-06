@@ -1,4 +1,4 @@
-# 常駐のときの構成 (undertone と同じ流儀)。作業コピーを bind mount するので、書き換えがそのまま走る。
+# 常駐のときの構成。作業コピーを bind mount するので、書き換えがそのまま走る。
 name: ai-meeting
 
 services:

@@ -6,7 +6,7 @@
 
 ![コンポーネント構成](docs/architecture.png)
 
-- 拡張が 5 秒ごとに webm を送り、server.js が ffmpeg で 5 分ごとの mp3 に分けて OpenAI で文字起こし ($0.0045/分、gpt-transcribe)、議事録とタイトルを生成 (gpt-5-mini) する。
+- 拡張が 5 秒ごとに webm を送る。server.js は ffmpeg で音声を 5 分ごとの mp3 に分け、OpenAI で文字起こし ($0.0045/分、gpt-transcribe) する。議事録とタイトルは gpt-5-mini で生成する。
 - 保存先は `~/ai-meeting/volume/<id>/` (recording.webm / transcript.txt / minutes.md)。
 - Web UI (`/`) は一覧・再生・議事録・ダウンロード・再処理・削除。文字起こしの `[hh:mm:ss]` をクリックすると動画がその位置へ飛ぶ。
 
@@ -14,7 +14,7 @@
 
 ## 常駐
 
-undertone と同じ。docker compose ([compose.yaml](compose.yaml)) を systemd の user unit で起こす。
+docker compose ([compose.yaml](compose.yaml)) を systemd の user unit から起動する。
 
 ```sh
 cp .env.example .env            # OPENAI_API_KEY を入れる
@@ -29,7 +29,7 @@ systemctl --user enable --now ai-meeting
 - 状態: `systemctl --user status ai-meeting` / `journalctl --user -u ai-meeting -f`
 - `.env` を変えたら `systemctl --user restart ai-meeting`
 
-Caddy (`/etc/caddy/Caddyfile` の自分のドメインのブロック内に追加して `sudo systemctl reload caddy`):
+Caddy には、`/etc/caddy/Caddyfile` の自分のドメインのブロック内に次を追加し、`sudo systemctl reload caddy` で反映する。
 
 ```
 	@ai-meeting host ai-meeting.example.com
