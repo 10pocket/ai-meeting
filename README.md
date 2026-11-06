@@ -4,14 +4,11 @@
 配信は tailnet 内だけ (例: `https://ai-meeting.example.com`、Caddy 経由)。
 **このサーバーに認証はありません。公開インターネットには出さないこと。**
 
-```
-Chrome 拡張 ──5秒ごとに webm を POST──▶ server.js ──▶ ~/ai-meeting/volume/<id>/
-  (タブ音声+映像+マイク)                    │              recording.webm / transcript.txt / minutes.md
-                                           ├─ ffmpeg: 音声を 5 分ごとの mp3 に分割
-                                           ├─ OpenAI gpt-transcribe: 文字起こし ($0.0045/分)
-                                           └─ OpenAI gpt-5-mini: 議事録 (概要/決定事項/アクション/論点/未決)
-Web UI (/) : 一覧・再生・議事録・ダウンロード・再処理・削除。[hh:mm:ss] クリックで動画が飛ぶ。
-```
+![コンポーネント構成](docs/architecture.png)
+
+- 拡張が 5 秒ごとに webm を送り、server.js が ffmpeg で 5 分ごとの mp3 に分けて OpenAI で文字起こし ($0.0045/分、gpt-transcribe)、議事録とタイトルを生成 (gpt-5-mini) する。
+- 保存先は `~/ai-meeting/volume/<id>/` (recording.webm / transcript.txt / minutes.md)。
+- Web UI (`/`) は一覧・再生・議事録・ダウンロード・再処理・削除。文字起こしの `[hh:mm:ss]` をクリックすると動画がその位置へ飛ぶ。
 
 依存パッケージなし (Node 24 の fetch / FormData / node:test)。ffmpeg だけコンテナに入れる。
 
