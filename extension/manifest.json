@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "ai-meeting recorder",
+  "version": "0.2.3",
+  "description": "開いている会議タブの音声・映像と自分のマイクを録画し、ai-meeting サーバーへ送る",
+  "permissions": [
+    "tabCapture",
+    "activeTab",
+    "storage"
+  ],
+  "action": {
+    "default_title": "このタブの会議を録画",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

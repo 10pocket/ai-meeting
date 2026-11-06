@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-meeting</title>
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 0; display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+  nav { border-right: 1px solid #ddd; overflow: auto; }
+  nav a { display: block; padding: 10px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid #eee; }
+  nav a.active { background: #eef; }
+  nav small { color: #666; }
+  main { padding: 16px 24px; overflow: auto; }
+  video { width: 100%; max-height: 45vh; background: #000; }
+  pre { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 4px; }
+  .status-recording { color: #c00 } .status-processing { color: #b70 } .status-error { color: #c00 } .status-done { color: #080 }
+  button { margin-right: 8px }
+</style>
+<nav id="list"></nav>
+<main id="main">
+  <p>左の一覧から選択。録画は Chrome 拡張のアイコンから開始。</p>
+  <h3>Chrome 拡張の入れ方</h3>
+  <ol>
+    <li><a href="/extension.zip">extension.zip をダウンロード</a>して展開</li>
+    <li><code>chrome://extensions</code> → デベロッパーモード → 「パッケージ化されていない拡張機能を読み込む」で展開した <code>extension</code> フォルダを選ぶ</li>
+    <li>Meet のタブで拡張アイコンを押す → 録画ページが開く → 「録画開始」</li>
+  </ol>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const api = (p, init) => fetch('/api' + p, init).then(r => r.json());
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+let current = location.hash.slice(1), items = [];
+
+async function loadList() {
+  items = await api('/recordings');
+  $('#list').innerHTML = items.map(r => `<a href="#${r.id}" class="${r.id === current ? 'active' : ''}">${esc(r.title)}<br>
+    <small>${new Date(r.createdAt).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })} <span class="status-${r.status}">${r.status}</span></small></a>`).join('');
+}
+async function show(id) {
+  current = id;
+  const r = await api('/recordings/' + id);
+  if (r.error) { $('#main').innerHTML = `<p>${esc(r.error)}</p>`; return; }
+  const f = n => `/recordings/${id}/${n}`;
+  $('#main').innerHTML = `
+    <h2>${esc(r.title)} <small class="status-${r.status}">${r.status}</small></h2>
+    ${r.error ? `<pre>${esc(r.error)}</pre>` : ''}
+    ${r.status !== 'recording' ? `<video controls preload="metadata" src="${f('recording.webm')}"></video>` : ''}
+    <p>
+      <a href="${f('recording.webm')}" download>録画をダウンロード</a>
+      ${r.transcript ? `<a href="${f('transcript.txt')}" download>文字起こし</a>` : ''}
+      ${r.minutes ? `<a href="${f('minutes.md')}" download>議事録 (md)</a>` : ''}
+    </p>
+    <p>
+      <button onclick="act('reprocess')" ${r.status === 'processing' || r.status === 'recording' ? 'disabled' : ''}>再処理</button>
+      <button onclick="del()">削除</button>
+    </p>
+    ${r.minutes ? `<h3>議事録</h3><pre>${esc(r.minutes)}</pre>` : ''}
+    ${r.transcript ? `<h3>文字起こし</h3><pre>${esc(r.transcript)}</pre>` : ''}`;
+  // [hh:mm:ss] クリックで動画をその位置へ
+  $('#main').querySelectorAll('pre').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g, (m, h, mi, s) => `<a href="#${id}" onclick="seek(${h * 3600 + mi * 60 + +s})">${m}</a>`));
+  loadList();
+}
+function seek(t) { const v = $('video'); if (v) { v.currentTime = t; v.play(); } }
+async function act(a) { await api(`/recordings/${current}/${a}`, { method: 'POST' }); show(current); }
+async function del() { if (confirm('削除しますか?')) { await api('/recordings/' + current, { method: 'DELETE' }); location.hash = ''; $('#main').innerHTML = ''; loadList(); } }
+onhashchange = () => location.hash && show(location.hash.slice(1));
+loadList().then(() => current && show(current));
+setInterval(() => { if (items.some(r => r.status === 'recording' || r.status === 'processing')) current ? show(current) : loadList(); }, 5000);
+</script>

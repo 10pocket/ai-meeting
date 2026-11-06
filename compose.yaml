@@ -1,0 +1,24 @@
+# 常駐のときの構成 (undertone と同じ流儀)。作業コピーを bind mount するので、書き換えがそのまま走る。
+name: ai-meeting
+
+services:
+  ai-meeting:
+    build: .
+    container_name: ai-meeting
+    working_dir: /app
+    # 依存なし。--watch なので server.js を変えれば中で起動し直す。
+    command: node --env-file-if-exists=.env --watch server.js
+    user: "1000:1000"
+    init: true
+    environment:
+      TZ: Asia/Tokyo
+      DATA_DIR: /data
+      PORT: "8790"
+    volumes:
+      - .:/app
+      # 録画・文字起こしはリポジトリの外に置く
+      - ${HOME}/ai-meeting/volume:/data
+    ports:
+      # API に認証はない。ホストの loopback だけに出す (外向きは caddy が持つ)。
+      - "127.0.0.1:8790:8790"
+    restart: "no"
