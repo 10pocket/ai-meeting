@@ -4,66 +4,149 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ai-meeting</title>
 <style>
-  body { font: 14px/1.6 system-ui, sans-serif; margin: 0; display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
-  nav { border-right: 1px solid #ddd; overflow: auto; }
-  nav a { display: block; padding: 10px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid #eee; }
-  nav a.active { background: #eef; }
-  nav small { color: #666; }
-  main { padding: 16px 24px; overflow: auto; }
-  video { width: 100%; max-height: 45vh; background: #000; }
-  pre { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 4px; }
-  .status-recording { color: #c00 } .status-processing { color: #b70 } .status-error { color: #c00 } .status-done { color: #080 }
-  button { margin-right: 8px }
+  /* 値は docs/ui-rules.md のトークン。extension/recorder.html と同じ値に保つ */
+  :root {
+    --bg: #f5f7f8; --surface: #fff; --ink: #16202a; --muted: #5b6773; --line: #dfe4e8;
+    --accent: #0f766e; --accent-ink: #fff; --accent-soft: #e1f4f1;
+    --rec: #c62828; --warn: #a15c07; --ok: #15803d;
+    --r-ctl: 6px; --r-panel: 8px;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+    --font: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e141b; --surface: #151c25; --ink: #e6edf3; --muted: #9aa7b4; --line: #27323d;
+      --accent: #5eead4; --accent-ink: #06201c; --accent-soft: #12302d; --rec: #f87171; --warn: #fbbf24; --ok: #4ade80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.7 var(--font); color: var(--ink); background: var(--bg); display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3, p { margin: 0; }
+  a { color: var(--accent); }
+
+  nav { border-right: 1px solid var(--line); background: var(--surface); overflow: auto; }
+  nav h1 { font-size: 16px; padding: var(--s4); border-bottom: 1px solid var(--line); }
+  nav a { display: block; padding: var(--s3) var(--s4); color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
+  nav a:hover { background: var(--bg); }
+  nav a[aria-current] { background: var(--accent-soft); border-left-color: var(--accent); }
+  .item-title { font-weight: 600; overflow-wrap: anywhere; }
+  .item-meta { display: flex; gap: var(--s3); align-items: center; color: var(--muted); font-size: 12px; }
+  .empty { padding: var(--s4); color: var(--muted); }
+
+  main { overflow: auto; padding: var(--s5) var(--s6); }
+  main > * { max-width: 52em; }
+  main > * + * { margin-top: var(--s4); }
+  h2 { font-size: 20px; line-height: 1.4; display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; }
+  video { width: 100%; max-height: 45vh; background: #000; border-radius: var(--r-panel); }
+  .row { display: flex; gap: var(--s2); flex-wrap: wrap; }
+  .note { color: var(--muted); font-size: 12px; }
+  .err { color: var(--rec); }
+
+  .badge { display: inline-flex; align-items: center; gap: var(--s1); font-size: 12px; font-weight: 400; color: var(--muted); }
+  .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .st-recording { color: var(--rec); } .st-processing { color: var(--warn); } .st-done { color: var(--ok); } .st-error { color: var(--rec); }
+
+  .btn { display: inline-flex; align-items: center; min-height: 36px; padding: 0 var(--s4); font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--r-ctl); text-decoration: none; cursor: pointer; }
+  .btn:hover { border-color: var(--muted); }
+  .btn-primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .btn-danger { color: var(--rec); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-copy { width: 36px; padding: 0; justify-content: center; color: var(--muted); transition: color .15s, background-color .15s, border-color .15s; }
+  .btn-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .btn-copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .btn-copy .i-check { display: none; }
+  .btn-copy.done { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+  .btn-copy.done .i-clip { display: none; } .btn-copy.done .i-check { display: inline; }
+  .btn-copy.fail { color: var(--rec); border-color: var(--rec); }
+  .copy-tools { display: flex; align-items: center; gap: var(--s2); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { .btn-copy { transition: none; } }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); }
+  .panel > header { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); padding: var(--s2) var(--s4); border-bottom: 1px solid var(--line); }
+  .panel h3 { font-size: 16px; }
+  .panel pre { margin: 0; padding: var(--s4); white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.8; }
+  .ts { font: 12px var(--mono); color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 4px; padding: 1px 6px; cursor: pointer; }
+  .ts:hover { text-decoration: underline; }
+  ol { padding-left: var(--s5); }
+
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; height: auto; }
+    nav { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { padding: var(--s4); }
+  }
 </style>
-<nav id="list"></nav>
-<main id="main">
-  <p>左の一覧から選択。録画は Chrome 拡張のアイコンから開始。</p>
-  <h3>Chrome 拡張の入れ方</h3>
-  <ol>
-    <li><a href="/extension.zip">extension.zip をダウンロード</a>して展開</li>
-    <li><code>chrome://extensions</code> → デベロッパーモード → 「パッケージ化されていない拡張機能を読み込む」で展開した <code>extension</code> フォルダを選ぶ</li>
-    <li>Meet のタブで拡張アイコンを押す → 録画ページが開く → 「録画開始」</li>
-  </ol>
-</main>
+<nav>
+  <h1>ai-meeting</h1>
+  <div id="list"></div>
+</nav>
+<main id="main" aria-live="polite"></main>
 <script>
 const $ = s => document.querySelector(s);
 const api = (p, init) => fetch('/api' + p, init).then(r => r.json());
-const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-let current = location.hash.slice(1), items = [];
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ST = { recording: '録画中', processing: '処理中', done: '完了', error: 'エラー' };
+const badge = s => `<span class="badge st-${s}">${ST[s] || s}</span>`;
+let current = location.hash.slice(1), items = [], rec = null;
+
+const intro = () => `
+  <h2>録画を選んでください</h2>
+  <p>左の一覧から選ぶと、議事録と録画を開けます。録画は Chrome 拡張から始めます。</p>
+  <div class="panel"><header><h3>Chrome 拡張を入れる</h3><a class="btn btn-primary" href="/extension.zip">extension.zip をダウンロード</a></header>
+    <pre>1. zip を展開する。
+2. <code>chrome://extensions</code> を開き、デベロッパーモードをオンにする。
+3. 「パッケージ化されていない拡張機能を読み込む」で、展開した <code>extension</code> フォルダを選ぶ。
+4. 会議のタブで拡張のアイコンを押し、録画ページで「録画を開始」を押す。</pre></div>`;
 
 async function loadList() {
   items = await api('/recordings');
-  $('#list').innerHTML = items.map(r => `<a href="#${r.id}" class="${r.id === current ? 'active' : ''}">${esc(r.title)}<br>
-    <small>${new Date(r.createdAt).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })} <span class="status-${r.status}">${r.status}</span></small></a>`).join('');
+  $('#list').innerHTML = items.length ? items.map(r => `<a href="#${r.id}" ${r.id === current ? 'aria-current="page"' : ''}>
+    <div class="item-title">${esc(r.title)}</div>
+    <div class="item-meta"><span>${new Date(r.createdAt).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })}</span>${badge(r.status)}</div></a>`).join('')
+    : '<p class="empty">まだ録画がありません。Chrome 拡張から録画を始めてください。</p>';
 }
 async function show(id) {
   current = id;
-  const r = await api('/recordings/' + id);
-  if (r.error) { $('#main').innerHTML = `<p>${esc(r.error)}</p>`; return; }
-  const f = n => `/recordings/${id}/${n}`;
+  rec = await api('/recordings/' + id);
+  if (rec.error && !rec.id) { $('#main').innerHTML = `<p class="err" role="alert">${esc(rec.error)} 一覧から選び直してください。</p>`; return; }
+  const r = rec, f = n => `/recordings/${id}/${n}`, busy = r.status === 'processing' || r.status === 'recording';
   $('#main').innerHTML = `
-    <h2>${esc(r.title)} <small class="status-${r.status}">${r.status}</small></h2>
-    ${r.error ? `<pre>${esc(r.error)}</pre>` : ''}
+    <h2>${esc(r.title)} ${badge(r.status)}</h2>
+    ${r.error ? `<p class="err" role="alert">処理に失敗しました: ${esc(r.error)} 「再処理」でやり直せます。</p>` : ''}
+    ${r.warning ? `<p class="note">${esc(r.warning)}</p>` : ''}
     ${r.status !== 'recording' ? `<video controls preload="metadata" src="${f('recording.webm')}"></video>` : ''}
-    <p>
-      <a href="${f('recording.webm')}" download>録画をダウンロード</a>
-      ${r.transcript ? `<a href="${f('transcript.txt')}" download>文字起こし</a>` : ''}
-      ${r.minutes ? `<a href="${f('minutes.md')}" download>議事録 (md)</a>` : ''}
-    </p>
-    <p>
-      <button onclick="act('reprocess')" ${r.status === 'processing' || r.status === 'recording' ? 'disabled' : ''}>再処理</button>
-      <button onclick="del()">削除</button>
-    </p>
-    ${r.minutes ? `<h3>議事録</h3><pre>${esc(r.minutes)}</pre>` : ''}
-    ${r.transcript ? `<h3>文字起こし</h3><pre>${esc(r.transcript)}</pre>` : ''}`;
-  // [hh:mm:ss] クリックで動画をその位置へ
-  $('#main').querySelectorAll('pre').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g, (m, h, mi, s) => `<a href="#${id}" onclick="seek(${h * 3600 + mi * 60 + +s})">${m}</a>`));
+    <div class="row">
+      <button class="btn" data-act="reprocess" ${busy ? 'disabled' : ''}>再処理</button>
+      <button class="btn btn-danger" data-act="delete">削除</button>
+    </div>
+    ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><pre>${esc(r.minutes)}</pre></section>` : ''}
+    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${esc(r.transcript)}</pre></section>` : ''}`;
+  // [hh:mm:ss] を押せるチップにする。押すと動画がその位置へ飛ぶ
+  $('#main').querySelectorAll('pre').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g,
+    (m, h, mi, s) => `<button type="button" class="ts" data-t="${h * 3600 + mi * 60 + +s}">${m.slice(1, -1)}</button>`));
   loadList();
 }
-function seek(t) { const v = $('video'); if (v) { v.currentTime = t; v.play(); } }
-async function act(a) { await api(`/recordings/${current}/${a}`, { method: 'POST' }); show(current); }
-async function del() { if (confirm('削除しますか?')) { await api('/recordings/' + current, { method: 'DELETE' }); location.hash = ''; $('#main').innerHTML = ''; loadList(); } }
-onhashchange = () => location.hash && show(location.hash.slice(1));
-loadList().then(() => current && show(current));
-setInterval(() => { if (items.some(r => r.status === 'recording' || r.status === 'processing')) current ? show(current) : loadList(); }, 5000);
+$('#main').addEventListener('click', async e => {
+  const ts = e.target.closest('.ts'), b = e.target.closest('[data-act]');
+  if (ts) { const v = $('video'); if (v) { v.currentTime = +ts.dataset.t; v.play(); } return; }
+  if (!b) return;
+  if (b.dataset.act === 'copy') {
+    const msg = $('#copy-msg');
+    try { await navigator.clipboard.writeText(rec.minutes); b.classList.add('done'); msg.className = 'sr-only'; msg.textContent = 'コピーしました'; }
+    catch { b.classList.add('fail'); msg.className = 'note err'; msg.textContent = 'コピーできません。HTTPS で開いてください。'; }
+    setTimeout(() => { b.classList.remove('done', 'fail'); msg.textContent = ''; }, 2000);
+  } else if (b.dataset.act === 'reprocess') { await api(`/recordings/${current}/reprocess`, { method: 'POST' }); show(current); }
+  else if (b.dataset.act === 'delete' && confirm('この録画を削除します。元に戻せません。')) {
+    await api('/recordings/' + current, { method: 'DELETE' }); location.hash = ''; current = ''; $('#main').innerHTML = intro(); loadList();
+  }
+});
+onhashchange = () => { current = location.hash.slice(1); current ? show(current) : ($('#main').innerHTML = intro(), loadList()); };
+loadList().then(() => current ? show(current) : ($('#main').innerHTML = intro()));
+setInterval(() => {
+  const cur = items.find(r => r.id === current);
+  if (cur && (cur.status === 'recording' || cur.status === 'processing')) show(current); // 表示中の録画だけ描き直す (再生位置を保つため)
+  else if (items.some(r => r.status === 'recording' || r.status === 'processing')) loadList();
+}, 5000);
 </script>

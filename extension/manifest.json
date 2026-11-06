@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ai-meeting recorder",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "開いている会議タブの音声・映像と自分のマイクを録画し、ai-meeting サーバーへ送る",
   "permissions": [
     "tabCapture",
