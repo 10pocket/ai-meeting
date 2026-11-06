@@ -14,6 +14,7 @@ services:
       TZ: Asia/Tokyo
       DATA_DIR: /data
       PORT: "8790"
+      HF_HOME: /data/hf
     volumes:
       - .:/app
       # 録画・文字起こしはリポジトリの外に置く
