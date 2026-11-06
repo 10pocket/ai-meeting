@@ -11,7 +11,7 @@ const PORT = +(process.env.PORT || 8790);
 const DATA = path.resolve(process.env.DATA_DIR || 'data');
 const KEY = process.env.OPENAI_API_KEY;
 const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || 'gpt-transcribe';
-const MINUTES_MODEL = process.env.MINUTES_MODEL || 'gpt-5-mini';
+const MINUTES_MODEL = process.env.MINUTES_MODEL || 'gpt-5.6-terra';
 // ponytail: 固定秒で切る (無音境界に寄せない)。発言が境界で割れるのが気になったら silencedetect で寄せる。
 const SEGMENT_SEC = 300;
 const PUBLIC = path.join(import.meta.dirname, 'public');

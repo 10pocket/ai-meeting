@@ -10,7 +10,7 @@
 
 ![議事録の画面](docs/minutes.png)
 
-- 拡張が 5 秒ごとに webm を送る。server.js は ffmpeg で音声を 5 分ごとの mp3 に分け、OpenAI で文字起こし ($0.0045/分、gpt-transcribe) する。議事録とタイトルは gpt-5-mini で生成する。
+- 拡張が 5 秒ごとに webm を送る。server.js は ffmpeg で音声を 5 分ごとの mp3 に分け、OpenAI で文字起こし ($0.0045/分、gpt-transcribe) する。議事録とタイトルは gpt-5.6-terra で生成する。
 - 保存先は `~/ai-meeting/volume/<id>/` (recording.webm / transcript.txt / minutes.md)。
 - Web UI (`/`) は一覧・再生・議事録・再処理・削除。文字起こしの `[hh:mm:ss]` をクリックすると動画がその位置へ飛ぶ。
 
