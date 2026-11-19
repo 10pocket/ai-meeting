@@ -10,6 +10,7 @@
     --accent: #0f766e; --accent-ink: #fff; --accent-soft: #e1f4f1;
     --rec: #c62828; --warn: #a15c07; --ok: #15803d;
     --series-1: #2a78d6; --series-2: #eb6834; /* グラフの系列色 (管理画面だけで使う) */
+    --speaker: #1d64c0; /* 押せる話者名 */
     --r-ctl: 6px; --r-panel: 8px;
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
     --font: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
@@ -19,7 +20,7 @@
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0e141b; --surface: #151c25; --ink: #e6edf3; --muted: #9aa7b4; --line: #27323d;
       --accent: #5eead4; --accent-ink: #06201c; --accent-soft: #12302d; --rec: #f87171; --warn: #fbbf24; --ok: #4ade80;
-      --series-1: #3987e5; --series-2: #d95926; }
+      --series-1: #3987e5; --series-2: #d95926; --speaker: #7ab3f5; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.7 var(--font); color: var(--ink); background: var(--bg); display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
@@ -90,8 +91,15 @@
   .chart text { fill: var(--muted); font: 11px var(--font); }
   .chart .grid { stroke: var(--line); }
   .chart g:hover rect { opacity: .8; }
-  .spk { display: grid; grid-template-columns: auto 1fr; gap: var(--s2) var(--s3); align-items: center; max-width: 28em; }
-  .spk input { font: inherit; color: var(--ink); background: var(--surface); min-height: 36px; padding: 0 var(--s2); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  .spk { font: inherit; font-weight: 600; color: var(--speaker); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .spk:hover { text-decoration-style: solid; }
+  .spk-pop { position: fixed; z-index: 10; width: 240px; padding: var(--s2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 4px 16px rgb(0 0 0 / .12); }
+  .spk-pop input { width: 100%; min-height: 36px; padding: 0 var(--s2); font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  .spk-pop ul { list-style: none; margin: var(--s1) 0 0; padding: 0; max-height: 200px; overflow: auto; }
+  .spk-pop li button { width: 100%; text-align: left; min-height: 32px; padding: 0 var(--s2); font: inherit; color: var(--ink); background: none; border: 0; border-radius: var(--r-ctl); cursor: pointer; }
+  .spk-pop li button:hover, .spk-pop li button:focus-visible { background: var(--accent-soft); }
+  .spk-pop li button.reset { color: var(--muted); }
+  .spk-pop .note { padding: var(--s1) var(--s2) 0; }
 
   @media (max-width: 760px) {
     body { grid-template-columns: 1fr; height: auto; }
@@ -115,6 +123,8 @@ const usd = n => n == null ? '単価未設定' : '$' + n.toFixed(3);
 const mb = n => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : (n / 1e6).toFixed(1) + ' MB';
 const API = { transcribe: '文字起こし', minutes: '議事録' };
 const named = t => t && t.replace(/話者\d+/g, k => rec.speakers?.[k] || k); // 表示とコピーにだけ話者名を当てる。ファイルは話者N のまま
+// 話者を押せる文字にする。押すとその場で名前を入力できる
+const chips = t => esc(t).replace(/話者\d+/g, k => `<button type="button" class="spk" data-spk="${k}" title="${k}。押して名前を付ける">${esc(rec.speakers?.[k] || k)}</button>`);
 
 const intro = () => `
   <h2>録画を選んでください</h2>
@@ -137,8 +147,7 @@ async function show(id) {
   rec = await api('/recordings/' + id);
   if (rec.error && !rec.id) { $('#main').innerHTML = `<p class="err" role="alert">${esc(rec.error)} 一覧から選び直してください。</p>`; return; }
   const r = rec, f = n => `/recordings/${id}/${n}`, busy = r.status === 'processing' || r.status === 'recording';
-  const spk = [...new Set(r.transcript?.match(/話者\d+/g) || [])].sort((a, b) => a.slice(2) - b.slice(2));
-  const total = r.usage.reduce((a, e) => a + (e.usd || 0), 0), unpriced = r.usage.some(e => e.usd == null);
+  const total = r.usage.reduce((a, e) => a + e.usd, 0);
   $('#main').innerHTML = `
     <h2>${esc(r.title)} ${badge(r.status)}</h2>
     ${r.error ? `<p class="err" role="alert">処理に失敗しました: ${esc(r.error)} 「再処理」でやり直せます。</p>` : ''}
@@ -148,19 +157,17 @@ async function show(id) {
       <button class="btn" data-act="reprocess" ${busy ? 'disabled' : ''}>再処理</button>
       <button class="btn btn-danger" data-act="delete">削除</button>
     </div>
-    ${spk.length ? `<section class="panel"><header><h3>話者</h3><button class="btn" data-act="speakers">話者名を保存</button></header>
-      <div class="body"><datalist id="names">${r.names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
-      <div class="spk">${spk.map(k => `<label for="spk-${k}">${k}</label><input id="spk-${k}" data-spk="${k}" list="names" maxlength="50" value="${esc(r.speakers?.[k] || '')}" placeholder="名前 (空なら ${k} のまま)">`).join('')}</div>
-      <p class="note" id="spk-msg" role="status">候補は過去に付けた名前。議事録と文字起こしの表示とコピーに反映する。</p></div></section>` : ''}
-    ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><pre>${esc(named(r.minutes))}</pre></section>` : ''}
-    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${esc(named(r.transcript))}</pre></section>` : ''}
+    ${/話者\d/.test(r.transcript) ? `<p class="note" id="spk-msg" role="status">議事録・文字起こしの話者を押すと名前を付けられる。候補は過去に付けた名前。</p>
+` : ''}
+    ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><pre>${chips(r.minutes)}</pre></section>` : ''}
+    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${chips(r.transcript)}</pre></section>` : ''}
     <section class="panel"><header><h3>利用料とサイズ</h3></header><div class="body">
       <div class="stats"><div><div class="stat-label">概算利用料</div><div class="stat-value">${r.usage.length ? usd(total) : '—'}</div></div>
         <div><div class="stat-label">保存サイズ</div><div class="stat-value">${mb(r.bytes)}</div></div></div>
       ${r.usage.length ? `<table><thead><tr><th>日時</th><th>API</th><th>モデル</th><th class="num">量</th><th class="num">USD</th></tr></thead><tbody>${r.usage.map(e => `<tr>
         <td>${new Date(e.at).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${API[e.api] || e.api}</td><td>${esc(e.model)}</td>
         <td class="num">${e.api === 'transcribe' ? (e.seconds / 60).toFixed(1) + ' 分' : `入力 ${e.inputTokens} / 出力 ${e.outputTokens} tokens`}</td><td class="num">${usd(e.usd)}</td></tr>`).join('')}</tbody></table>
-        <p class="note">単価から計算した概算。再処理するとその分も足される。${unpriced ? '単価未設定の分は合計に入っていない。' : ''}</p>` : '<p class="note">利用料の記録はない (記録を始める前に処理した録画)。</p>'}
+        <p class="note">単価から計算した概算。再処理するとその分も足される。</p>` : '<p class="note">利用料の記録はない (記録を始める前に処理した録画)。</p>'}
     </div></section>`;
   // [hh:mm:ss] を押せるチップにする。押すと動画がその位置へ飛ぶ
   $('#main').querySelectorAll('pre').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g,
@@ -168,23 +175,51 @@ async function show(id) {
   loadList();
 }
 $('#main').addEventListener('click', async e => {
-  const ts = e.target.closest('.ts'), b = e.target.closest('[data-act]');
+  const ts = e.target.closest('.ts'), b = e.target.closest('[data-act]'), sp = e.target.closest('.spk');
   if (ts) { const v = $('video'); if (v) { v.currentTime = +ts.dataset.t; v.play(); } return; }
+  if (sp) return editSpeaker(sp);
   if (!b) return;
   if (b.dataset.act === 'copy') {
     const msg = $('#copy-msg');
     try { await navigator.clipboard.writeText(named(rec.minutes)); b.classList.add('done'); msg.className = 'sr-only'; msg.textContent = 'コピーしました'; }
     catch { b.classList.add('fail'); msg.className = 'note err'; msg.textContent = 'コピーできません。HTTPS で開いてください。'; }
     setTimeout(() => { b.classList.remove('done', 'fail'); msg.textContent = ''; }, 2000);
-  } else if (b.dataset.act === 'speakers') {
-    const body = Object.fromEntries([...document.querySelectorAll('[data-spk]')].map(i => [i.dataset.spk, i.value]));
-    const r = await fetch(`/api/recordings/${current}/speakers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (r.ok) show(current); else { const m = $('#spk-msg'); m.className = 'note err'; m.textContent = `保存できません: ${(await r.json()).error}。名前は 50 文字以内にする。`; }
   } else if (b.dataset.act === 'reprocess') { await api(`/recordings/${current}/reprocess`, { method: 'POST' }); show(current); }
   else if (b.dataset.act === 'delete' && confirm('この録画を削除します。元に戻せません。')) {
     await api('/recordings/' + current, { method: 'DELETE' }); location.hash = ''; current = ''; $('#main').innerHTML = intro(); loadList();
   }
 });
+// 話者を押すと、その下に入力欄と候補 (過去に付けた名前) のメニューを出す。Enter か候補で保存、Esc か外側で閉じる
+const closePop = () => $('#spk-pop')?.remove();
+function editSpeaker(chip) {
+  closePop();
+  const k = chip.dataset.spk, cur = rec.speakers?.[k] || '', box = chip.getBoundingClientRect();
+  const pop = Object.assign(document.createElement('div'), { id: 'spk-pop', className: 'spk-pop' });
+  pop.innerHTML = `<input maxlength="50" placeholder="${k} の名前を入力" aria-label="${k} の名前" value="${esc(cur)}"><ul></ul><p class="note">Enter で保存、Esc で閉じる。</p>`;
+  pop.style.left = Math.min(box.left, innerWidth - 248) + 'px';
+  pop.style.top = (box.bottom + 236 > innerHeight ? box.top - 240 : box.bottom + 4) + 'px';
+  document.body.append(pop);
+  const input = pop.querySelector('input'), ul = pop.querySelector('ul');
+  const list = (q = '') => { // 開いた直後は全候補。打ち始めたら絞り込む
+    ul.innerHTML = rec.names.filter(n => n !== cur && n.includes(q)).map(n => `<li><button type="button" data-name="${esc(n)}">${esc(n)}</button></li>`).join('')
+      + (cur ? `<li><button type="button" class="reset" data-name="">${k} に戻す</button></li>` : ''); };
+  const save = async name => {
+    if (name.trim() === cur) return closePop();
+    const r = await fetch(`/api/recordings/${current}/speakers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...rec.speakers, [k]: name }) });
+    if (r.ok) { // 画面ごと描き直すと動画が読み直されて高さが 0 になり、スクロールが飛ぶ。話者名の文字だけ差し替える
+      rec.speakers = (await r.json()).speakers; if (name.trim() && !rec.names.includes(name.trim())) rec.names.push(name.trim());
+      document.querySelectorAll(`.spk[data-spk="${k}"]`).forEach(c => c.textContent = rec.speakers[k] || k);
+      closePop(); return chip.focus();
+    }
+    const note = pop.querySelector('.note'); note.className = 'note err'; note.textContent = `保存できません: ${(await r.json()).error}`;
+  };
+  list(); input.focus(); input.select();
+  input.addEventListener('input', () => list(input.value.trim()));
+  pop.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); chip.focus(); } else if (e.key === 'Enter' && e.target === input && !e.isComposing) save(input.value); });
+  ul.addEventListener('click', e => { const b = e.target.closest('[data-name]'); if (b) save(b.dataset.name); });
+}
+addEventListener('mousedown', e => { if (!e.target.closest('#spk-pop, .spk')) closePop(); });
+$('#main').addEventListener('scroll', closePop);
 async function showAdmin() {
   loadList();
   const a = await api('/admin'), now = new Date(), by = Object.fromEntries(a.months.map(m => [m.month, m]));
