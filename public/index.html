@@ -205,8 +205,7 @@ async function showAdmin() {
     <section class="panel"><header><h3>概要</h3></header><div class="body"><div class="stats">
       <div><div class="stat-label">今月の概算利用料</div><div class="stat-value">${usd(sum(months.at(-1)))}</div></div>
       <div><div class="stat-label">録画の保存量</div><div class="stat-value">${mb(a.storage.recordings)}</div></div>
-      <div><div class="stat-label">話者分離モデル</div><div class="stat-value">${mb(a.storage.models)}</div></div></div>
-      ${a.priceMissing ? '<p class="note">議事録モデルの単価が未設定なので、議事録の料金は 0 として数えている。.env に PRICE_MINUTES_INPUT_PER_1M と PRICE_MINUTES_OUTPUT_PER_1M を書く。</p>' : ''}</div></section>
+      <div><div class="stat-label">話者分離モデル</div><div class="stat-value">${mb(a.storage.models)}</div></div></div></div></section>
     <section class="panel"><header><h3>月ごとの概算利用料 (USD)</h3><div class="legend"><span style="--c: var(--series-1)">文字起こし</span><span style="--c: var(--series-2)">議事録</span></div></header><div class="body">
       <svg class="chart" viewBox="0 -4 ${W} ${H + 24}" role="img" aria-label="月ごとの概算利用料の棒グラフ。数値は下の表にある">
         <line class="grid" x1="0" x2="${W}" y1="${top}" y2="${top}"/><line class="grid" x1="0" x2="${W}" y1="${H}" y2="${H}"/>

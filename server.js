@@ -15,9 +15,10 @@ const MINUTES_MODEL = process.env.MINUTES_MODEL || 'gpt-5.6-terra';
 const SPEAKERS = process.env.NUM_SPEAKERS || '-1'; // 人数が分かっているなら指定すると精度が上がる。-1 は自動
 const MAX_CHUNK_SEC = 300; // 1回の文字起こしに渡す最大長 (25MB 上限に余裕を持たせる)
 const PAD_SEC = 0.15; // 話者境界は数百ms ずれるので、前後に少し余白を付けて切る
-// 概算料金 (USD)。単価が変わったら .env で上書きする。未設定の単価は usd: null で記録し、UI で「単価未設定」と出す
-const price = k => process.env[k] ? +process.env[k] : null;
-const PRICE = { transcribePerMin: price('PRICE_TRANSCRIBE_PER_MIN') ?? 0.0045, minutesIn: price('PRICE_MINUTES_INPUT_PER_1M'), minutesOut: price('PRICE_MINUTES_OUTPUT_PER_1M') };
+// 概算料金 (USD)。既定は 2026-11 時点の公式価格 (gpt-transcribe / gpt-5.6-terra)。モデルや単価が変わったら .env で上書きする
+// ponytail: 272K tokens 超の割増 (入力 2 倍・出力 1.5 倍) とキャッシュ割引は見ない。会議 1 本では届かない
+const price = (k, d) => process.env[k] ? +process.env[k] : d;
+const PRICE = { transcribePerMin: price('PRICE_TRANSCRIBE_PER_MIN', 0.0045), minutesIn: price('PRICE_MINUTES_INPUT_PER_1M', 2), minutesOut: price('PRICE_MINUTES_OUTPUT_PER_1M', 12) };
 const USAGE = path.join(DATA, 'usage.jsonl'); // API 呼び出しの台帳。録画を消しても月次の集計に残す
 const PUBLIC = path.join(import.meta.dirname, 'public');
 const MINUTES_PROMPT = `あなたは会議の議事録作成者です。渡された文字起こし (発言ごとに [hh:mm:ss] 話者N: の形式) から、日本語で Markdown の議事録を作成します。
@@ -133,7 +134,7 @@ async function processRecording(id) {
     const { text: minutes, usage: u } = await summarize(transcript);
     const inT = u?.prompt_tokens || 0, outT = u?.completion_tokens || 0;
     await logUsage({ id, api: 'minutes', model: MINUTES_MODEL, inputTokens: inT, outputTokens: outT,
-      usd: PRICE.minutesIn === null || PRICE.minutesOut === null ? null : (inT * PRICE.minutesIn + outT * PRICE.minutesOut) / 1e6 });
+      usd: (inT * PRICE.minutesIn + outT * PRICE.minutesOut) / 1e6 });
     await fsp.writeFile(path.join(d, 'minutes.md'), minutes);
     const t = minutes.match(/^#\s+(.+)$/m)?.[1].trim(); // 1行目の「# タイトル」。再処理しても createdAt から組み直すので重ならない
     await patchMeta(id, { status: 'done', warning, title: t ? `${stamp(meta.createdAt)} ${t}` : stamp(meta.createdAt) });
@@ -173,7 +174,7 @@ async function route(req, res) {
   }
   if (p === '/api/admin' && m === 'GET') {
     const [total, hf] = await Promise.all([dirSize(DATA), dirSize(path.join(DATA, 'hf'))]);
-    return send(res, 200, { months: monthly(await readUsage()), storage: { recordings: total - hf, models: hf }, priceMissing: PRICE.minutesIn === null || PRICE.minutesOut === null });
+    return send(res, 200, { months: monthly(await readUsage()), storage: { recordings: total - hf, models: hf } });
   }
   if (p === '/api/recordings' && m === 'POST') {
     const createdAt = new Date().toISOString();
