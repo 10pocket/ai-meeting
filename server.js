@@ -15,6 +15,10 @@ const MINUTES_MODEL = process.env.MINUTES_MODEL || 'gpt-5.6-terra';
 const SPEAKERS = process.env.NUM_SPEAKERS || '-1'; // 人数が分かっているなら指定すると精度が上がる。-1 は自動
 const MAX_CHUNK_SEC = 300; // 1回の文字起こしに渡す最大長 (25MB 上限に余裕を持たせる)
 const PAD_SEC = 0.15; // 話者境界は数百ms ずれるので、前後に少し余白を付けて切る
+// 概算料金 (USD)。単価が変わったら .env で上書きする。未設定の単価は usd: null で記録し、UI で「単価未設定」と出す
+const price = k => process.env[k] ? +process.env[k] : null;
+const PRICE = { transcribePerMin: price('PRICE_TRANSCRIBE_PER_MIN') ?? 0.0045, minutesIn: price('PRICE_MINUTES_INPUT_PER_1M'), minutesOut: price('PRICE_MINUTES_OUTPUT_PER_1M') };
+const USAGE = path.join(DATA, 'usage.jsonl'); // API 呼び出しの台帳。録画を消しても月次の集計に残す
 const PUBLIC = path.join(import.meta.dirname, 'public');
 const MINUTES_PROMPT = `あなたは会議の議事録作成者です。渡された文字起こし (発言ごとに [hh:mm:ss] 話者N: の形式) から、日本語で Markdown の議事録を作成します。
 最初の行は「# 」で始まる 20 文字以内のタイトル (会議の内容が一目で分かるもの)。続けて次の順で、該当なしの節は「なし」と書く:
@@ -33,6 +37,18 @@ const readMeta = async id => JSON.parse(await fsp.readFile(path.join(dir(id), 'm
 const patchMeta = async (id, p) => { const m = { ...(await readMeta(id)), ...p }; await fsp.writeFile(path.join(dir(id), 'meta.json'), JSON.stringify(m, null, 2)); return m; };
 const hms = s => [s / 3600, s / 60 % 60, s % 60].map(n => String(Math.floor(n)).padStart(2, '0')).join(':');
 const readText = fp => fsp.readFile(fp, 'utf8').catch(() => null);
+const logUsage = e => fsp.appendFile(USAGE, JSON.stringify({ at: new Date().toISOString(), ...e }) + '\n');
+const readUsage = async () => ((await readText(USAGE)) || '').split('\n').filter(Boolean).map(l => JSON.parse(l));
+async function dirSize(d) {
+  const ents = await fsp.readdir(d, { recursive: true, withFileTypes: true }).catch(() => []);
+  const sizes = await Promise.all(ents.filter(e => e.isFile()).map(e => fsp.stat(path.join(e.parentPath, e.name)).then(s => s.size, () => 0)));
+  return sizes.reduce((a, b) => a + b, 0);
+}
+export function monthly(entries) { // 月ごと・API ごとの合計 USD。古い月から
+  const m = {};
+  for (const e of entries) { const k = stamp(e.at).slice(0, 7); (m[k] ??= { month: k, transcribe: 0, minutes: 0 })[e.api] += e.usd || 0; }
+  return Object.values(m).sort((a, b) => a.month.localeCompare(b.month));
+}
 const stamp = iso => new Date(iso).toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Asia/Tokyo' }).slice(0, 16); // 2026-11-03 20:15
 
 // ---- パイプライン ----
@@ -53,7 +69,8 @@ async function summarize(transcript) {
     { role: 'system', content: MINUTES_PROMPT },
     { role: 'user', content: transcript },
   ] });
-  return (await openai('/chat/completions', body, { 'Content-Type': 'application/json' })).choices[0].message.content;
+  const j = await openai('/chat/completions', body, { 'Content-Type': 'application/json' });
+  return { text: j.choices[0].message.content, usage: j.usage };
 }
 // 話者区間 → 文字起こし単位。同じ話者の近い区間はつなぎ、短すぎる区間は直前に吸収し、長すぎる区間は割る。
 export function makeChunks(turns) {
@@ -110,7 +127,13 @@ async function processRecording(id) {
       return texts[i] && `[${hms(c.start)}] ${c.speaker === null ? '' : names.get(c.speaker) + ': '}${texts[i]}`;
     }).filter(Boolean).join('\n');
     await fsp.writeFile(path.join(d, 'transcript.txt'), transcript);
-    const minutes = await summarize(transcript);
+    // ponytail: 秒数×単価で概算。途中のチャンクで失敗した分は記録しない
+    const sec = chunks.reduce((a, c) => a + Math.min(c.end + PAD_SEC, duration) - Math.max(c.start - PAD_SEC, 0), 0);
+    await logUsage({ id, api: 'transcribe', model: TRANSCRIBE_MODEL, seconds: Math.round(sec), usd: sec / 60 * PRICE.transcribePerMin });
+    const { text: minutes, usage: u } = await summarize(transcript);
+    const inT = u?.prompt_tokens || 0, outT = u?.completion_tokens || 0;
+    await logUsage({ id, api: 'minutes', model: MINUTES_MODEL, inputTokens: inT, outputTokens: outT,
+      usd: PRICE.minutesIn === null || PRICE.minutesOut === null ? null : (inT * PRICE.minutesIn + outT * PRICE.minutesOut) / 1e6 });
     await fsp.writeFile(path.join(d, 'minutes.md'), minutes);
     const t = minutes.match(/^#\s+(.+)$/m)?.[1].trim(); // 1行目の「# タイトル」。再処理しても createdAt から組み直すので重ならない
     await patchMeta(id, { status: 'done', warning, title: t ? `${stamp(meta.createdAt)} ${t}` : stamp(meta.createdAt) });
@@ -134,6 +157,8 @@ async function sendFile(req, res, fp) {
   res.writeHead(status, { 'Content-Type': TYPES[path.extname(fp)] || 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1 });
   fs.createReadStream(fp, { start, end }).pipe(res);
 }
+const listIds = async () => (await fsp.readdir(DATA)).filter(id => fs.existsSync(path.join(DATA, id, 'meta.json')));
+const allNames = async () => [...new Set((await Promise.all((await listIds()).map(readMeta))).flatMap(r => Object.values(r.speakers || {})))].sort(); // 話者名の入力履歴
 async function route(req, res) {
   const p = new URL(req.url, 'http://x').pathname, m = req.method;
   let g;
@@ -143,9 +168,12 @@ async function route(req, res) {
     return spawn('zip', ['-qr', '-', 'extension'], { cwd: import.meta.dirname }).stdout.pipe(res);
   }
   if (p === '/api/recordings' && m === 'GET') {
-    const ids = (await fsp.readdir(DATA)).filter(id => fs.existsSync(path.join(DATA, id, 'meta.json')));
-    const list = await Promise.all(ids.map(readMeta));
+    const list = await Promise.all((await listIds()).map(readMeta));
     return send(res, 200, list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  }
+  if (p === '/api/admin' && m === 'GET') {
+    const [total, hf] = await Promise.all([dirSize(DATA), dirSize(path.join(DATA, 'hf'))]);
+    return send(res, 200, { months: monthly(await readUsage()), storage: { recordings: total - hf, models: hf }, priceMissing: PRICE.minutesIn === null || PRICE.minutesOut === null });
   }
   if (p === '/api/recordings' && m === 'POST') {
     const createdAt = new Date().toISOString();
@@ -156,8 +184,15 @@ async function route(req, res) {
   }
   if ((g = p.match(/^\/api\/recordings\/([\w-]+)$/))) {
     const id = g[1], d = dir(id);
-    if (m === 'GET') return send(res, 200, { ...(await readMeta(id)), transcript: await readText(path.join(d, 'transcript.txt')), minutes: await readText(path.join(d, 'minutes.md')) });
+    if (m === 'GET') return send(res, 200, { ...(await readMeta(id)), names: await allNames(), bytes: await dirSize(d), usage: (await readUsage()).filter(e => e.id === id), transcript: await readText(path.join(d, 'transcript.txt')), minutes: await readText(path.join(d, 'minutes.md')) });
     if (m === 'DELETE') { await readMeta(id); await fsp.rm(d, { recursive: true, force: true }); return send(res, 200, { ok: true }); }
+  }
+  if ((g = p.match(/^\/api\/recordings\/([\w-]+)\/speakers$/)) && m === 'POST') { // { "話者1": "山田", … }。空文字で解除
+    await readMeta(g[1]);
+    let body; try { body = JSON.parse(await new Response(req).text()); } catch { throw new HttpError(400, 'bad json'); }
+    if (!body || typeof body !== 'object' || Object.entries(body).some(([k, v]) => !/^話者\d+$/.test(k) || typeof v !== 'string' || v.length > 50)) throw new HttpError(400, 'bad speakers');
+    const speakers = Object.fromEntries(Object.entries(body).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+    return send(res, 200, await patchMeta(g[1], { speakers }));
   }
   if ((g = p.match(/^\/api\/recordings\/([\w-]+)\/(chunk|finish|reprocess)$/)) && m === 'POST') {
     const id = g[1]; await readMeta(id);
