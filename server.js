@@ -13,6 +13,7 @@ const KEY = process.env.OPENAI_API_KEY;
 const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || 'gpt-transcribe';
 const MINUTES_MODEL = process.env.MINUTES_MODEL || 'gpt-5.6-terra';
 const SPEAKERS = process.env.NUM_SPEAKERS || '-1'; // 人数が分かっているなら指定すると精度が上がる。-1 は自動
+const MATCH = +(process.env.SPEAKER_MATCH_THRESHOLD || 0.55); // 声の特徴のコサイン類似度がこれ以上なら、過去に名前を付けた人と推定する
 const MAX_CHUNK_SEC = 300; // 1回の文字起こしに渡す最大長 (25MB 上限に余裕を持たせる)
 const PAD_SEC = 0.15; // 話者境界は数百ms ずれるので、前後に少し余白を付けて切る
 // 概算料金 (USD)。既定は 2026-11 時点の公式価格 (gpt-transcribe / gpt-5.6-terra)。モデルや単価が変わったら .env で上書きする
@@ -21,14 +22,21 @@ const price = (k, d) => process.env[k] ? +process.env[k] : d;
 const PRICE = { transcribePerMin: price('PRICE_TRANSCRIBE_PER_MIN', 0.0045), minutesIn: price('PRICE_MINUTES_INPUT_PER_1M', 2), minutesOut: price('PRICE_MINUTES_OUTPUT_PER_1M', 12) };
 const USAGE = path.join(DATA, 'usage.jsonl'); // API 呼び出しの台帳。録画を消しても月次の集計に残す
 const PUBLIC = path.join(import.meta.dirname, 'public');
-const MINUTES_PROMPT = `あなたは会議の議事録作成者です。渡された文字起こし (発言ごとに [hh:mm:ss] 話者N: の形式) から、日本語で Markdown の議事録を作成します。
-最初の行は「# 」で始まる 20 文字以内のタイトル (会議の内容が一目で分かるもの)。続けて次の順で、該当なしの節は「なし」と書く:
-## 概要 (3行以内)
-## 決定事項 (箇条書き。決まったことだけ。議論中・提案止まりは含めない)
-## アクションアイテム (箇条書き。「担当: 〜 / 期限: 〜」が分かる範囲で付ける)
-## 議論のポイント (論点ごとに簡潔に。根拠になった発言の時刻を [hh:mm:ss] で添える)
-## 未決事項・持ち越し
-文字起こしにない情報を補わない。話者は「話者N」のまま書く。会話の中の名乗りや呼びかけから名前が分かる場合に限り名前で書く。話者分離の誤りで同じ人が別の話者になったり、別の人が混ざったりすることがあるので、話者の取り違えが疑われる箇所は断定しない。`;
+const MINUTES_PROMPT = `あなたは会議の議事録作成者です。渡された文字起こし (発言ごとに [hh:mm:ss] 話者N: の形式) から、日本語で端的な Markdown 議事録を作ります。読み手は会議に出ていない人で、「何が決まり、誰が何をするか」を 1 分で把握したい。
+
+1 行目は「# 」で始まる 20 文字以内のタイトル (内容が一目で分かるもの)。続けて次の順で書く。該当がない節は見出しごと省く (「なし」とは書かない):
+## 概要 — 2 文以内。目的と結論だけ。
+## 決定事項 — 決まったことだけ。議論中・提案止まりは含めない。
+## アクションアイテム — 「内容 (担当: 話者N / 期限: 〜)」。担当・期限は文字起こしで分かるときだけ付け、推測しない。
+## 論点 — 結論に影響した論点だけ、最大 5 項目。各項目の末尾に根拠の時刻を [hh:mm:ss] で 1 つ添える。
+## 持ち越し — 未決のまま残った事項。
+
+書き方:
+- 箇条書きは 1 項目 1 行・60 文字以内、体言止め。前置き・経緯・感想・相づち・雑談は書かない。
+- 同じ内容を複数の節に重ねて書かない (決定事項に書いたことは論点に書かない)。
+- 全体で 600 文字程度を目安とし、会議が長くても項目を増やすより統合する。
+- 文字起こしにない情報を補わない。
+- 話者は必ず「話者N」と書き、名前に置き換えない (名前は利用者が画面で付ける)。話者分離の誤りで同じ人が別の話者になったり、別の人が混ざったりすることがあるので、取り違えが疑われる箇所は担当を断定しない。`;
 
 fs.mkdirSync(DATA, { recursive: true });
 
@@ -66,7 +74,7 @@ async function transcribe(file) {
   return (await openai('/audio/transcriptions', fd)).text;
 }
 async function summarize(transcript) {
-  const body = JSON.stringify({ model: MINUTES_MODEL, messages: [
+  const body = JSON.stringify({ model: MINUTES_MODEL, verbosity: 'low', messages: [ // verbosity: 短く書かせる (GPT-5 系の Chat Completions の引数)
     { role: 'system', content: MINUTES_PROMPT },
     { role: 'user', content: transcript },
   ] });
@@ -94,6 +102,26 @@ async function pool(items, limit, fn) {
   await Promise.all(Array.from({ length: limit }, async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } }));
   return out;
 }
+// ---- 話者の推定 ----
+const cosine = (a, b) => { let d = 0, x = 0, y = 0; for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; x += a[i] ** 2; y += b[i] ** 2; } return d / Math.sqrt(x * y); };
+// voices: { 話者N: 特徴 }、profiles: [{ name, vec }] (人が確定した名前だけ)。似ている順に 1 人 1 名で当てる
+export function guessSpeakers(voices, profiles, threshold = MATCH) {
+  const pairs = Object.entries(voices).flatMap(([k, v]) => profiles.map(p => ({ k, name: p.name, sim: cosine(v, p.vec) })))
+    .filter(p => p.sim >= threshold).sort((a, b) => b.sim - a.sim);
+  const out = {}, used = new Set();
+  for (const p of pairs) if (!(p.k in out) && !used.has(p.name)) { out[p.k] = { name: p.name, sim: Math.round(p.sim * 100) / 100 }; used.add(p.name); }
+  return out;
+}
+async function profiles(exceptId) { // 過去の録画で、人が名前を付けた話者の特徴。推定のまま確定していない名前は使わない (誤りを広げないため)
+  // ponytail: 毎回全録画の voices.json を読む。録画が数千になったら集計をキャッシュする
+  const out = [];
+  for (const id of await listIds()) {
+    if (id === exceptId) continue;
+    const meta = await readMeta(id), voices = JSON.parse(await readText(path.join(DATA, id, 'voices.json')) || '{}');
+    for (const [k, name] of Object.entries(meta.speakers || {})) if (voices[k] && !meta.guessed?.[k]) out.push({ name, vec: voices[k] });
+  }
+  return out;
+}
 async function processRecording(id) {
   const d = dir(id);
   try {
@@ -107,10 +135,11 @@ async function processRecording(id) {
     const wav = path.join(d, 'audio.wav'), seg = path.join(d, 'audio');
     await exec('ffmpeg', ['-y', '-i', video, '-vn', '-ac', '1', '-ar', '16000', wav]);
     const duration = (fs.statSync(wav).size - 44) / 32000; // 16kHz 16bit モノラル
-    let chunks, warning = null;
+    let chunks, warning = null, emb = {};
     try { // 話者ごとの発言単位に切る。失敗しても文字起こしは止めず、話者なしで固定長に切る
-      await exec('python3', [path.join(import.meta.dirname, 'diarize.py'), wav, path.join(d, 'diarization.json'), SPEAKERS, '6'], { timeout: 3600e3 });
+      await exec('python3', [path.join(import.meta.dirname, 'diarize.py'), wav, path.join(d, 'diarization.json'), SPEAKERS, '6', path.join(d, 'embeddings.json')], { timeout: 3600e3 });
       chunks = makeChunks(JSON.parse(await fsp.readFile(path.join(d, 'diarization.json'), 'utf8')));
+      emb = JSON.parse(await fsp.readFile(path.join(d, 'embeddings.json'), 'utf8'));
     } catch (e) {
       warning = '話者分離に失敗: ' + String(e.stderr?.slice(-300) || e.message);
       chunks = Array.from({ length: Math.ceil(duration / MAX_CHUNK_SEC) }, (_, i) => ({ start: i * MAX_CHUNK_SEC, end: Math.min((i + 1) * MAX_CHUNK_SEC, duration), speaker: null }));
@@ -128,6 +157,12 @@ async function processRecording(id) {
       return texts[i] && `[${hms(c.start)}] ${c.speaker === null ? '' : names.get(c.speaker) + ': '}${texts[i]}`;
     }).filter(Boolean).join('\n');
     await fsp.writeFile(path.join(d, 'transcript.txt'), transcript);
+    // 話者N ごとの声の特徴を残し、過去に名前を付けた人と照らして推定する。人が付けた名前は上書きしない
+    const voices = Object.fromEntries([...names].filter(([n]) => emb[n]).map(([n, k]) => [k, emb[n]]));
+    await fsp.writeFile(path.join(d, 'voices.json'), JSON.stringify(voices));
+    const cur = await readMeta(id), confirmed = Object.fromEntries(Object.entries(cur.speakers || {}).filter(([k]) => !cur.guessed?.[k]));
+    const guesses = Object.entries(guessSpeakers(Object.fromEntries(Object.entries(voices).filter(([k]) => !confirmed[k])), (await profiles(id)).filter(p => !Object.values(confirmed).includes(p.name))));
+    await patchMeta(id, { speakers: { ...confirmed, ...Object.fromEntries(guesses.map(([k, g]) => [k, g.name])) }, guessed: Object.fromEntries(guesses.map(([k, g]) => [k, g.sim])) });
     // ponytail: 秒数×単価で概算。途中のチャンクで失敗した分は記録しない
     const sec = chunks.reduce((a, c) => a + Math.min(c.end + PAD_SEC, duration) - Math.max(c.start - PAD_SEC, 0), 0);
     await logUsage({ id, api: 'transcribe', model: TRANSCRIBE_MODEL, seconds: Math.round(sec), usd: sec / 60 * PRICE.transcribePerMin });
@@ -188,12 +223,13 @@ async function route(req, res) {
     if (m === 'GET') return send(res, 200, { ...(await readMeta(id)), names: await allNames(), bytes: await dirSize(d), usage: (await readUsage()).filter(e => e.id === id), transcript: await readText(path.join(d, 'transcript.txt')), minutes: await readText(path.join(d, 'minutes.md')) });
     if (m === 'DELETE') { await readMeta(id); await fsp.rm(d, { recursive: true, force: true }); return send(res, 200, { ok: true }); }
   }
-  if ((g = p.match(/^\/api\/recordings\/([\w-]+)\/speakers$/)) && m === 'POST') { // { "話者1": "山田", … }。空文字で解除
-    await readMeta(g[1]);
+  if ((g = p.match(/^\/api\/recordings\/([\w-]+)\/speakers$/)) && m === 'POST') { // { "話者1": "山田", … } を今の名前に重ねる。空文字で解除。送った話者は「確定」になる
+    const meta = await readMeta(g[1]);
     let body; try { body = JSON.parse(await new Response(req).text()); } catch { throw new HttpError(400, 'bad json'); }
     if (!body || typeof body !== 'object' || Object.entries(body).some(([k, v]) => !/^話者\d+$/.test(k) || typeof v !== 'string' || v.length > 50)) throw new HttpError(400, 'bad speakers');
-    const speakers = Object.fromEntries(Object.entries(body).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
-    return send(res, 200, await patchMeta(g[1], { speakers }));
+    const speakers = Object.fromEntries(Object.entries({ ...meta.speakers, ...body }).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+    const guessed = Object.fromEntries(Object.entries(meta.guessed || {}).filter(([k]) => !(k in body)));
+    return send(res, 200, await patchMeta(g[1], { speakers, guessed }));
   }
   if ((g = p.match(/^\/api\/recordings\/([\w-]+)\/(chunk|finish|reprocess)$/)) && m === 'POST') {
     const id = g[1]; await readMeta(id);

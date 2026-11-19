@@ -5,7 +5,7 @@ import fs from 'node:fs';
 process.env.PORT = '0';
 process.env.DATA_DIR = fs.mkdtempSync('/tmp/ai-meeting-test-');
 delete process.env.OPENAI_API_KEY;
-const { server, makeChunks, monthly } = await import('./server.js');
+const { server, makeChunks, monthly, guessSpeakers } = await import('./server.js');
 import { once } from 'node:events';
 if (!server.address()) await once(server, 'listening');
 server.unref();
@@ -30,6 +30,8 @@ test('upload → list → range → finish (no key → error)', async () => {
   assert.equal((await post({ x: 'a' })).status, 400);
   meta = await api(`/api/recordings/${id}`);
   assert.deepEqual([meta.speakers, meta.names, meta.usage], [{ 話者1: '山田' }, ['山田'], []]);
+  await post({ 話者2: '田中' }); // 送った話者だけ重ねる
+  assert.deepEqual((await api(`/api/recordings/${id}`)).speakers, { 話者1: '山田', 話者2: '田中' });
   assert.ok(meta.bytes > 0);
   const admin = await api('/api/admin');
   assert.deepEqual(admin.months, []); assert.ok(admin.storage.recordings > 0);
@@ -56,4 +58,11 @@ test('monthly: 月 (JST) と API ごとに合計し、単価未設定は 0 で�
     { at: '2026-11-02T00:00:00Z', api: 'minutes', usd: null },
     { at: '2026-10-01T00:00:00Z', api: 'minutes', usd: 0.2 },
   ]), [{ month: '2026-10', transcribe: 0, minutes: 0.2 }, { month: '2026-11', transcribe: 0.1, minutes: 0 }]);
+});
+
+test('guessSpeakers: 似ている順に 1 人 1 名、しきい値未満は当てない', () => {
+  const g = guessSpeakers({ 話者1: [1, 0, 0], 話者2: [0.9, 0.1, 0], 話者3: [0, 0, 1] },
+    [{ name: '山田', vec: [1, 0, 0] }, { name: '山田', vec: [0.95, 0.05, 0] }, { name: '田中', vec: [0.8, 0.6, 0] }], 0.5);
+  assert.deepEqual(Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v.name])), { 話者1: '山田', 話者2: '田中' });
+  assert.equal(g.話者1.sim, 1);
 });

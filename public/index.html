@@ -93,6 +93,18 @@
   .chart g:hover rect { opacity: .8; }
   .spk { font: inherit; font-weight: 600; color: var(--speaker); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .spk:hover { text-decoration-style: solid; }
+  .spk.guess { font-weight: 400; font-style: italic; }
+  .spk.guess::after { content: "?"; margin-left: 1px; }
+  .md { padding: var(--s4); overflow-wrap: anywhere; }
+  .md > * + * { margin-top: var(--s2); }
+  .md h4, .md h5 { margin-bottom: 0; }
+  .md h4 { font-size: 16px; margin-top: var(--s4); }
+  .md h4:first-child { margin-top: 0; }
+  .md h5 { font-size: 14px; margin-top: var(--s3); }
+  .md ul, .md ol { margin-bottom: 0; padding-left: var(--s5); }
+  .md li.sub { margin-left: var(--s5); }
+  .md code { font: 12px var(--mono); background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+  .md .pick { font-weight: 600; }
   .spk-pop { position: fixed; z-index: 10; width: 240px; padding: var(--s2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 4px 16px rgb(0 0 0 / .12); }
   .spk-pop input { width: 100%; min-height: 36px; padding: 0 var(--s2); font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); }
   .spk-pop ul { list-style: none; margin: var(--s1) 0 0; padding: 0; max-height: 200px; overflow: auto; }
@@ -123,8 +135,27 @@ const usd = n => n == null ? '単価未設定' : '$' + n.toFixed(3);
 const mb = n => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : (n / 1e6).toFixed(1) + ' MB';
 const API = { transcribe: '文字起こし', minutes: '議事録' };
 const named = t => t && t.replace(/話者\d+/g, k => rec.speakers?.[k] || k); // 表示とコピーにだけ話者名を当てる。ファイルは話者N のまま
-// 話者を押せる文字にする。押すとその場で名前を入力できる
-const chips = t => esc(t).replace(/話者\d+/g, k => `<button type="button" class="spk" data-spk="${k}" title="${k}。押して名前を付ける">${esc(rec.speakers?.[k] || k)}</button>`);
+// 話者を押せる文字にする。押すとその場で名前を入力できる。声から推定した名前は斜体に「?」を付ける
+const chip = k => { const g = rec.guessed?.[k];
+  return `<button type="button" class="spk${g ? ' guess' : ''}" data-spk="${k}" title="${k}。${g ? `声から推定 (類似度 ${g})。押して確定・修正` : '押して名前を付ける'}">${esc(rec.speakers?.[k] || k)}</button>`; };
+const chips = html => html.replace(/話者\d+/g, chip); // エスケープ済みの HTML に使う
+// 議事録の Markdown を表示用の HTML にする。見出し・箇条書き・太字・コードだけ。最初の「# タイトル」は画面の見出しと重なるので出さない
+function md(t) {
+  let html = '', list = null;
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const line of t.replace(/^#\s.*\n?/, '').split('\n')) {
+    let m;
+    if ((m = line.match(/^(#{1,4})\s+(.*)/))) { close(); const h = m[1].length <= 2 ? 'h4' : 'h5'; html += `<${h}>${inline(m[2])}</${h}>`; }
+    else if ((m = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)/))) {
+      const tag = /\d/.test(m[2]) ? 'ol' : 'ul';
+      if (list !== tag) { close(); html += `<${tag}>`; list = tag; }
+      html += `<li${m[1].length >= 2 ? ' class="sub"' : ''}>${inline(m[3])}</li>`;
+    } else if (!line.trim()) close();
+    else { close(); html += `<p>${inline(line)}</p>`; }
+  }
+  close(); return html;
+}
 
 const intro = () => `
   <h2>録画を選んでください</h2>
@@ -159,8 +190,8 @@ async function show(id) {
     </div>
     ${/話者\d/.test(r.transcript) ? `<p class="note" id="spk-msg" role="status">議事録・文字起こしの話者を押すと名前を付けられる。候補は過去に付けた名前。</p>
 ` : ''}
-    ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><pre>${chips(r.minutes)}</pre></section>` : ''}
-    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${chips(r.transcript)}</pre></section>` : ''}
+    ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><div class="md">${chips(md(r.minutes))}</div></section>` : ''}
+    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${chips(esc(r.transcript))}</pre></section>` : ''}
     <section class="panel"><header><h3>利用料とサイズ</h3></header><div class="body">
       <div class="stats"><div><div class="stat-label">概算利用料</div><div class="stat-value">${r.usage.length ? usd(total) : '—'}</div></div>
         <div><div class="stat-label">保存サイズ</div><div class="stat-value">${mb(r.bytes)}</div></div></div>
@@ -170,7 +201,7 @@ async function show(id) {
         <p class="note">単価から計算した概算。再処理するとその分も足される。</p>` : '<p class="note">利用料の記録はない (記録を始める前に処理した録画)。</p>'}
     </div></section>`;
   // [hh:mm:ss] を押せるチップにする。押すと動画がその位置へ飛ぶ
-  $('#main').querySelectorAll('pre').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g,
+  $('#main').querySelectorAll('.panel pre, .md').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g,
     (m, h, mi, s) => `<button type="button" class="ts" data-t="${h * 3600 + mi * 60 + +s}">${m.slice(1, -1)}</button>`));
   loadList();
 }
@@ -181,7 +212,7 @@ $('#main').addEventListener('click', async e => {
   if (!b) return;
   if (b.dataset.act === 'copy') {
     const msg = $('#copy-msg');
-    try { await navigator.clipboard.writeText(named(rec.minutes)); b.classList.add('done'); msg.className = 'sr-only'; msg.textContent = 'コピーしました'; }
+    try { await navigator.clipboard.writeText(named(rec.minutes)); /* コピーは Markdown のテキストのまま */ b.classList.add('done'); msg.className = 'sr-only'; msg.textContent = 'コピーしました'; }
     catch { b.classList.add('fail'); msg.className = 'note err'; msg.textContent = 'コピーできません。HTTPS で開いてください。'; }
     setTimeout(() => { b.classList.remove('done', 'fail'); msg.textContent = ''; }, 2000);
   } else if (b.dataset.act === 'reprocess') { await api(`/recordings/${current}/reprocess`, { method: 'POST' }); show(current); }
@@ -191,31 +222,31 @@ $('#main').addEventListener('click', async e => {
 });
 // 話者を押すと、その下に入力欄と候補 (過去に付けた名前) のメニューを出す。Enter か候補で保存、Esc か外側で閉じる
 const closePop = () => $('#spk-pop')?.remove();
-function editSpeaker(chip) {
+function editSpeaker(el) {
   closePop();
-  const k = chip.dataset.spk, cur = rec.speakers?.[k] || '', box = chip.getBoundingClientRect();
+  const k = el.dataset.spk, cur = rec.speakers?.[k] || '', guessed = rec.guessed?.[k], box = el.getBoundingClientRect();
   const pop = Object.assign(document.createElement('div'), { id: 'spk-pop', className: 'spk-pop' });
   pop.innerHTML = `<input maxlength="50" placeholder="${k} の名前を入力" aria-label="${k} の名前" value="${esc(cur)}"><ul></ul><p class="note">Enter で保存、Esc で閉じる。</p>`;
   pop.style.left = Math.min(box.left, innerWidth - 248) + 'px';
   pop.style.top = (box.bottom + 236 > innerHeight ? box.top - 240 : box.bottom + 4) + 'px';
   document.body.append(pop);
   const input = pop.querySelector('input'), ul = pop.querySelector('ul');
-  const list = (q = '') => { // 開いた直後は全候補。打ち始めたら絞り込む
-    ul.innerHTML = rec.names.filter(n => n !== cur && n.includes(q)).map(n => `<li><button type="button" data-name="${esc(n)}">${esc(n)}</button></li>`).join('')
-      + (cur ? `<li><button type="button" class="reset" data-name="">${k} に戻す</button></li>` : ''); };
+  // 候補は過去に付けた名前を全部出す (入力しても絞り込まない)。推定中なら先頭に「確定」を置く
+  ul.innerHTML = (guessed ? `<li><button type="button" class="pick" data-name="${esc(cur)}">${esc(cur)} で確定</button></li>` : '')
+    + rec.names.filter(n => n !== cur).map(n => `<li><button type="button" data-name="${esc(n)}">${esc(n)}</button></li>`).join('')
+    + (cur ? `<li><button type="button" class="reset" data-name="">${k} に戻す</button></li>` : '');
   const save = async name => {
-    if (name.trim() === cur) return closePop();
-    const r = await fetch(`/api/recordings/${current}/speakers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...rec.speakers, [k]: name }) });
-    if (r.ok) { // 画面ごと描き直すと動画が読み直されて高さが 0 になり、スクロールが飛ぶ。話者名の文字だけ差し替える
-      rec.speakers = (await r.json()).speakers; if (name.trim() && !rec.names.includes(name.trim())) rec.names.push(name.trim());
-      document.querySelectorAll(`.spk[data-spk="${k}"]`).forEach(c => c.textContent = rec.speakers[k] || k);
-      closePop(); return chip.focus();
+    if (name.trim() === cur && !guessed) return closePop();
+    const r = await fetch(`/api/recordings/${current}/speakers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [k]: name }) });
+    if (r.ok) { // 画面ごと描き直すと動画が読み直されて高さが 0 になり、スクロールが飛ぶ。話者名のボタンだけ差し替える
+      ({ speakers: rec.speakers, guessed: rec.guessed } = await r.json()); if (name.trim() && !rec.names.includes(name.trim())) rec.names.push(name.trim());
+      document.querySelectorAll(`.spk[data-spk="${k}"]`).forEach(c => c.outerHTML = chip(k));
+      closePop(); return $(`.spk[data-spk="${k}"]`)?.focus();
     }
     const note = pop.querySelector('.note'); note.className = 'note err'; note.textContent = `保存できません: ${(await r.json()).error}`;
   };
-  list(); input.focus(); input.select();
-  input.addEventListener('input', () => list(input.value.trim()));
-  pop.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); chip.focus(); } else if (e.key === 'Enter' && e.target === input && !e.isComposing) save(input.value); });
+  input.focus(); input.select();
+  pop.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); el.focus(); } else if (e.key === 'Enter' && e.target === input && !e.isComposing) save(input.value); });
   ul.addEventListener('click', e => { const b = e.target.closest('[data-name]'); if (b) save(b.dataset.name); });
 }
 addEventListener('mousedown', e => { if (!e.target.closest('#spk-pop, .spk')) closePop(); });
