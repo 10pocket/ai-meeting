@@ -15,7 +15,7 @@ let rec, id, server, queue = Promise.resolve(), stream, startedAt;
     const src = { chromeMediaSource: 'tab', chromeMediaSourceId: q.get('streamId') };
     const tabStream = await navigator.mediaDevices.getUserMedia({
       audio: { mandatory: src },
-      video: { mandatory: { ...src, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 } },
+      video: { mandatory: { ...src, maxWidth: 1280, maxHeight: 720, maxFrameRate: 5 } },
     });
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     const ctx = new AudioContext();
@@ -38,7 +38,7 @@ $('#start').onclick = async () => {
     const r = await fetch(server + '/api/recordings', { method: 'POST' });
     ({ id } = await r.json());
   } catch (e) { return status('サーバーに接続できません: ' + e.message + '。URL を確認してください。', 'err'); }
-  rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 1_000_000 });
+  rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 400_000, audioBitsPerSecond: 64_000 });
   rec.ondataavailable = e => { if (e.data.size) queue = queue.then(() => fetch(`${server}/api/recordings/${id}/chunk`, { method: 'POST', body: e.data })).catch(e => status('送信に失敗しました: ' + e.message + '。ネットワークを確認してください。', 'err')); };
   rec.onstop = async () => {
     await queue;

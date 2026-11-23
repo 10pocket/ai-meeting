@@ -191,7 +191,6 @@ async function show(id) {
     ${/話者\d/.test(r.transcript) ? `<p class="note" id="spk-msg" role="status">議事録・文字起こしの話者を押すと名前を付けられる。候補は過去に付けた名前。</p>
 ` : ''}
     ${r.minutes ? `<section class="panel"><header><h3>議事録</h3><div class="copy-tools"><span id="copy-msg" role="status"></span><button class="btn btn-copy" data-act="copy" title="Markdown をコピー" aria-label="Markdown をコピー"><svg class="i-clip" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button></div></header><div class="md">${chips(md(r.minutes))}</div></section>` : ''}
-    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${chips(esc(r.transcript))}</pre></section>` : ''}
     <section class="panel"><header><h3>利用料とサイズ</h3></header><div class="body">
       <div class="stats"><div><div class="stat-label">概算利用料</div><div class="stat-value">${r.usage.length ? usd(total) : '—'}</div></div>
         <div><div class="stat-label">保存サイズ</div><div class="stat-value">${mb(r.bytes)}</div></div></div>
@@ -199,7 +198,8 @@ async function show(id) {
         <td>${new Date(e.at).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${API[e.api] || e.api}</td><td>${esc(e.model)}</td>
         <td class="num">${e.api === 'transcribe' ? (e.seconds / 60).toFixed(1) + ' 分' : `入力 ${e.inputTokens} / 出力 ${e.outputTokens} tokens`}</td><td class="num">${usd(e.usd)}</td></tr>`).join('')}</tbody></table>
         <p class="note">単価から計算した概算。再処理するとその分も足される。</p>` : '<p class="note">利用料の記録はない (記録を始める前に処理した録画)。</p>'}
-    </div></section>`;
+    </div></section>
+    ${r.transcript ? `<section class="panel"><header><h3>文字起こし</h3></header><pre>${chips(esc(r.transcript))}</pre></section>` : ''}`;
   // [hh:mm:ss] を押せるチップにする。押すと動画がその位置へ飛ぶ
   $('#main').querySelectorAll('.panel pre, .md').forEach(pre => pre.innerHTML = pre.innerHTML.replace(/\[(\d\d):(\d\d):(\d\d)\]/g,
     (m, h, mi, s) => `<button type="button" class="ts" data-t="${h * 3600 + mi * 60 + +s}">${m.slice(1, -1)}</button>`));

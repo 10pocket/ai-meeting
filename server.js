@@ -128,8 +128,8 @@ async function processRecording(id) {
     const meta = await patchMeta(id, { status: 'processing', error: null });
     if (!KEY) throw new Error('OPENAI_API_KEY is not set');
     const upload = path.join(d, 'upload.webm'), video = path.join(d, 'recording.webm');
-    if (fs.existsSync(upload)) { // MediaRecorder の追記 webm は長さも cue も無く seek できない。copy で書き直す。
-      await exec('ffmpeg', ['-y', '-i', upload, '-c', 'copy', video]);
+    if (fs.existsSync(upload)) { // MediaRecorder の追記 webm は長さも cue も無く seek できない。書き直すついでに 480p・5fps に落とす (会議なら 1 時間 20MB 前後、元の約 1/24)
+      await exec('ffmpeg', ['-y', '-i', upload, '-vf', 'scale=-2:480,fps=5', '-c:v', 'libvpx-vp9', '-crf', '38', '-b:v', '0', '-row-mt', '1', '-cpu-used', '5', '-c:a', 'libopus', '-b:a', '48k', video], { timeout: 3600e3 });
       await fsp.unlink(upload);
     }
     const wav = path.join(d, 'audio.wav'), seg = path.join(d, 'audio');
